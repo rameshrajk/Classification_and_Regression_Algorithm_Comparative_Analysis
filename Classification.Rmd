@@ -1,0 +1,179 @@
+---
+title: "Project 2: Classification"
+output: html_notebook
+---
+
+Link to "Hotel booking demand": https://www.kaggle.com/jessemostipak/hotel-booking-demand
+
+### Initial Data Exploration and Cleaning
+```{r}
+#load the data
+hb <- read.csv("hotel_bookings.csv")
+attach(hb)
+```
+Check out the Kaggle link for more information on the data set and its variables
+
+```{r}
+#exploration function 1
+str(hb)
+```
+This data set contains booking information for a city hotel and a resort hotel. I am aiming to predict the possibility of booking or if is_canceled is 0 or 1 (1 if canceled). I decided to start off exploring the data with the str() function to get an idea of the structure of the data and see a list of all the columns. We can see that this is a data set containing 119390 observations and 32 attributes. We also see that most of the data types for the attributes are either int or chr. The ints make sense as their are mostly counts but some of the chrs may have to be changed to factors as they are options or categories. We can also see a few null values for agent and company which we will also further explore in the next section. Before that, however, let's drop some columns so we can focus on the most relevant attributes.
+
+```{r}
+#data cleaning: dropping unnecessary numerical columns
+hb <- subset(hb, select = -c(arrival_date_year, arrival_date_day_of_month, booking_changes, days_in_waiting_list, agent, company))
+#data cleaning: dropping unnecessary categorical columns
+hb <- subset(hb, select = -c(country, assigned_room_type, reservation_status, reservation_status_date))
+```
+I first looked into which numerical columns might not be the most necessary. Arrival date year and day of month are unecessary as we will be using arrival week. Booking data and days in waiting list could both change over time and may not be useful for modeling. Finally agent and company are both id numbers that don't have much pertinence to the cancellation factor.
+
+Next I looked into which categorical attributes were necessary. Here country has many levels that may not generalize well in the model, something I learned with my regression work. Next assigned room type is quite similar to reserved room type so it is deemed redundant. Next reservation status and its date are first directly related to the cancel factor so we can get rid of multicolinearity early on here.
+
+```{r}
+#exploration function 2
+summary(hb)
+```
+With the summary function we want to move our focus from the structure of the date to the columns themselves. Specifically, if they have the right data types and NA values. First, as mentioned earlier, we have to change a few character types and even ints to factor variables.
+
+```{r}
+#cleaning: changing variable data types 
+hb$hotel <- as.factor(hb$hotel)
+hb$is_canceled <- as.factor(hb$is_canceled)
+hb$meal <- as.factor(hb$meal)
+hb$market_segment <- as.factor(hb$market_segment)
+hb$distribution_channel <- as.factor(hb$distribution_channel)
+hb$is_repeated_guest  <- as.factor(hb$is_repeated_guest )
+hb$reserved_room_type <- as.factor(hb$reserved_room_type)
+hb$deposit_type <- as.factor(hb$deposit_type)
+hb$customer_type <- as.factor(hb$customer_type)
+hb$adr[hb$adr==5400] <- 540
+```
+The following variables were converted to factors: hotel, is_canceled, meal, market_segment, distribution_channel, is_repeated_guest, reserved_room_type, deposit_type, and customer_type. Many variables were changed but the rules were the same accross all cases; an attribute was only changed to a factor if it was out of a few categories and was discretely separate for each option. Other variables such as babies are also discrete but have the possibility of increasing past their certain limits; variables similar to this case were left unchanged. One more thing, the max of adr, Average Daily Rate, is 5400, which is not possible so it must be a input error. This is fixed to 540.
+
+```{r}
+#cleaning: dealing with missing values and obs with no guests
+hb$children[is.na(hb$children)] <- 0
+hb <- hb[ which((hb$adults + hb$children + hb$babies)!=0), ] #double check
+```
+There are four columns that have null/NA values: children, country, agent, and company. Luckily, we actually dropped three of these leaving children. Theoretically, if we did have to deal with these NAs I would still get rid of the columns as there is no sound way to guess the specific values here. For the children variables, it is safe to assume that null values means there are no children. Outside of these NA issues, a similar issue that has to be addressed are rows that have 0 guests (adults+children+babies). These are either typos/errors or input that wasn't cleared properly. Either way these rows are removed in this part of the cleaning. 
+
+```{r}
+#exploration function 3
+head(hb)
+tail(hb)
+```
+Next, with the head/tail functions we can look at the beginning and end of the data in the format of rows. An instance in this context is the booking information of a customer. This is also a good time to see if there are any unreasonable data points at the ends of the data. Just a quick look tells us the beginning is mostly resort hotel bookings in July, week 27, whereas the tail is city hotel and week 35, in August. Another comparable variable is the market_segment which is Direct, Corporate, and Online TA for the beginning and offline TA/TO for the end. The data seems to be many years with week numbers for different years.
+
+```{r}
+#exploration function 4
+table(hotel, is_canceled)
+table(hotel, is_canceled)[3]/table(hotel, is_canceled)[1]
+table(hotel, is_canceled)[4]/table(hotel, is_canceled)[2]
+
+table(customer_type, is_canceled)
+table(customer_type, is_canceled)[5]/table(customer_type, is_canceled)[1]
+table(customer_type, is_canceled)[6]/table(customer_type, is_canceled)[2]
+table(customer_type, is_canceled)[7]/table(customer_type, is_canceled)[3]
+table(customer_type, is_canceled)[8]/table(customer_type, is_canceled)[4]
+```
+Out of all the factor variables, I was most interested in how hotel type and customer type were conditioned with cancellation. Using the table function I can observe  exactly that. We see that there is a much higher number of cancellations for the city hotel than the resort hotel. For customer types, we see that transient customers have the highest cancellation rate followed by contract, transient party, and group at a very small 11.39%.
+
+```{r}
+#exploration function 5
+library(caret)
+library(mlbench)
+corMatrix1 <- cor(hb[sapply(hb,is.numeric)])
+findCorrelation(corMatrix1, cutoff=0.5, verbose=TRUE)
+```
+For the last part of data exploration, I decided to start feature selection early and looking into multicolinearity. I wasn't able to simple look at just my target variable, is_canceled, as it was a factor and using other libraries just made it too difficult to discern between all the levels in the data set. Instead, performing feature selection with caret's findCorrelation function allowed me to see which variables are highly correlated and must be dealt with. However, after some confusion I realized the output of integer(0) mean there are no correlations that meet the criteria of the cutoff 0.5; we are pretty safe from multicolinearity here. Next let's explore the data further with a couple graphs.  
+
+```{r}
+#exploration graph 1
+library(ggplot2)
+ggplot(data = hb, mapping = aes(x = is_canceled, fill = hotel)) + 
+  geom_bar() + 
+  facet_wrap(~ customer_type) +
+  labs(c("0", "1"), title = "Cancellation by Customer Type and Hotel") + scale_x_discrete(name = "Cancellation", labels=c("Stayed", "Canceled")) +
+  scale_fill_discrete(name = "Hotel", labels = c("City", "Resort"))
+```
+For the first graph, I decided to explore the relationships between my main factors, is_canceled, hotel, customer type. Using fill and facet wrap, we can explore all factors at once. Some obvious observations are that the transient and transient party customers are the largest groups in that order. Contract is much smaller than both and group is very small, almost nonexistent. Coming back to our earlier observation comparing cancellation proportion among groups, we can see this much more clearly with transient have a large chunk of canceled bookings and then contract proportionally having almost half, transient party slightly less than half, and group's cancellation being extremely small. AS for the hotel breakdown, we can clearly see that city hotel observations make a much larger portion of the data with more than half of transient and transient party observation coming from city hotels and essentially the same for contract customers. 
+
+```{r}
+#exploration graph 2
+ggplot(data = hb, mapping = aes(is_canceled, adr, fill = hotel)) + 
+  geom_boxplot() + 
+  facet_wrap(~ customer_type) +
+  labs(c("0", "1"), title = "Cancellation Adr Distribution by Customer Type and Hotel") + scale_x_discrete(name = "Cancellation", labels=c("Stayed", "Canceled")) +
+  scale_fill_discrete(name = "Hotel", labels = c("City", "Resort"))
+```
+This dataset doesn't have too many numerical variables but I decided to explore just Adr, Average Daily Rate (the sum of transactions divided by the number of nights stayed), for my other graph. Instead of just exploring it's own distribution I decided to also compare it with hotel, customer type, and cancellation conditions. Starting off with comparing just the magnitude of the values, except for canceled contract bookings, it seems that median City Adr is greater than Resort Adr in all other cases. There is also a larger interquartile range for transient customers, which may be due to their large observation number. Between stayed or canceled bookings, the adr is essentially the same except for canceled resort groups, which is much lower than their staying resort counterparts. Coming to the hotel types, we see that resorts generally have higher variation with adr than city hotels. All in all, it seems that cities have higher adrs than resorts, staying customers more than canceled, and arguably transient above others who are pretty much tied.
+
+### Modeling
+```{r}
+#feature selecting decisions
+#attrEval from CORElearn
+library(CORElearn)
+sort(attrEval("is_canceled", hb, estimator="ReliefFexpRank",  ReliefIterations=30))
+
+#corr_var from lares
+library(lares)
+corr_var(hb, is_canceled, max_pvalue = 0.05)
+```
+Before we move onto create the models, let's decide what features we should use. Many of the inductive learning feature selection methods in the handbook didn't scale well for this large data set and froze/hung up when running them. However, after doing some research, I learned about the CORElearn package that helps with feature selection for large datasets and the lares package that works efficiently as well. The attrEval function for CORElearn evaluates all the attributes in relation to a target. By sorting this output, we can see that deposit_type, customer_type, lead_time, market_segment, required_car_parking_spaces, is_repeated_guest, reserved_room_type, and 5 more variables are greatest and above 1. The corr_var function from the lares package is a little more familiar as it works with correlation. Here I plotted the top 30 most significant correlations with is_canceled. We see that deposit_type, lead_type, market_segment, required_car_parking_spaces, distribution_channel, hotel, customer_type, previous_cancellations, is_repeated guests, reserved_room_type, and adr perhaps being the greatest in the curve. Essentially all the features have something to add but the top 3 seem to be deposit type, total_of_special_requests, and market_segment. Though I was originally going to use just these 3, I decided to use all as everything may contribute in different ways. This feature exploration was still a good experience to work with CORElearn and lares as well as learn more about the top attributes according to each.
+
+```{r}
+#divide train and test
+set.seed(1234)
+i <- sample(1:nrow(hb), nrow(hb)*0.75, replace=FALSE)
+train <- hb[i,]
+test <- hb[-i,]
+
+#build models
+
+#logistic regression model
+glm1 <- glm(is_canceled~., data=train, family=binomial)
+
+#naive bayes model
+library(e1071)
+nb1 <- naiveBayes(is_canceled~., data=train)
+
+#decision tree model
+library(tree)
+tree2 <- tree(is_canceled~., data=train)
+```
+### Metrics/Evaluation
+```{r}
+#logistic regression metrics
+summary(glm1)
+probs <- predict(glm1, newdata=test, type="response")
+glmpred <- ifelse(probs>0.5, 1, 0)
+table(glmpred, test$is_canceled)
+glmacc <- mean(glmpred==test$is_canceled)
+print(paste("acc: ", glmacc))
+```
+Looking at the logistic regression summary we can see that many of the variables/their levels were significant in the model. We see a large drop from null deviance to residual deviance, 117904 to 77086, which means that our predictors were good predictors compared to using just the intercept. Looking at the models table of predictions and actual values, we see that there are much more TPs and TNs than FNs and FPs  and this translates to the accuracy of 80.72%, which is quite good.
+
+```{r}
+#naive bayes metrics
+nbpred <- predict(nb1, newdata=test, type="class")
+confusionMatrix(nbpred, test$is_canceled)
+table(nbpred, test$is_canceled)
+library(caret)
+nbacc <- mean(nbpred==test$is_canceled)
+print(paste("acc: ", nbacc))
+```
+The naive bayes algorithm, however, didn't perform so well. With much more FNs than TPs, the sensitivity was much worse. Interestingly, there were much more TNs than FPs leading to a very high specificity. This may be due the "naiveness" of naive bayes which return false regardless of the given sample most of the time. This low sensitivity is seen in the accuracy, which is 45.7%.
+
+```{r}
+#decision tree metrics
+summary(tree2)
+tree_pred2 <- predict(tree2, newdata=test, type="class")
+table(tree_pred2, test$is_canceled)
+treeacc <- mean(tree_pred2 == test$is_canceled)
+print(paste("acc: ", treeacc))
+```
+Finally, the decision tree pick it back up with table values much like logistic regression. Interestingly, the model only used deposit_type, lead_time, market_segment, previous_cancellations, and total_of_special_requests. It had a low misclassification error rate of .2013 and the accuracy is very close to logistic regression at 79.66%.
+
+Ranking the algorithms from best to worst accuracy, we have logistic regression, decision tree, and naive bayes. Naive bayes ran the slowest out of the three because it is more simplistic probability learning and is generally meant for small data sets. Moreover, some of the predictors may not have been independent so the naive assumption that they are may have limited the performance of the algorithm. This is most likely the reason it was outperformed by logistic regression and the decision tree. Logistic regression searches for a single linear decision boundary whereas the decision tree partitions the feature space into half spaces for a boundary but in this case the effect was more or less the same. However, because decision trees are so flexible, the model may have been prone to overfitting and logistic regression was less susceptible here. Maybe if any pruning was done, the accuracy could have increased. All in all, this was a battle of bias-variance tradeoff and logistic won, very slightly, and naive bayes struggled against the size of the data set.
+
+Logistic regression may have won as it assumed the relationship between the predictors and cancellation to be linear and was very close in this case. All in all, this classification study on hotel booking cancellation was introspective in that it highlighted the importance of various predictors if not all. In the future, when predicting the booking status of a customer, perhaps all the data of a customer should be holistically considered. However, we also learned that deposit_type, lead_time, and market_segment were some of the top predictors and previous_cancellations and total_of_special_requests were runner ups. Lead time and deposit type really show the customer's interest when actually confirming the booking and may be the most directly associated attributes. These type of variables show what kind of customer, either very inclined or normal, is booking and coupled with special requests we can see if the customer is really planning ahead to stay. Previous cancellation can also signify similar connotations either showing that they often hold rooms as an option or actually follow through on previous bookings. Finally, market segment is somewhat different showing more where the customer may be coming from but is nonetheless similar; if I was really interested in a trip I may book with a travel agent than just directly. This project was also a good introduction to feature engineering packages such as CORElearn and lares. In the future, classification models such as this can help hotels prioritize their services and even retain more customers by targeting those more prone to cancel.

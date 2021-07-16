@@ -1,0 +1,204 @@
+---
+title: "Project 2: Regression"
+output: html_notebook
+---
+Link to "Hourly Weather Surface - Brazil (Southeast region)": https://www.kaggle.com/PROPPG-PPG/hourly-weather-surface-brazil-southeast-region
+
+### Initial Data Exploration and Cleaning
+```{r}
+#load the data
+sude <- read.csv("sudeste.csv")
+sude <- sude[ which(sude$yr>=2009 & sude$yr<2016), ]
+attach(sude)
+```
+Check out the Kaggle link for more information on the data set and its variables
+
+```{r}
+#exploration function 1
+str(sude)
+```
+This data set is hourly weather data from 122 weather stations in Southeast (Sudeste) Brazil. I am aiming to predict the temperature given other variables with my regression models. I decided to start off exploring the data with the str() function to get an idea of the structure of the data and see a list of all the columns. We can see that this is a data set containing 9779168 observations (cut down to ) and 31 attributes. We also see the data types for each column and they seem to all make sense. Looking closer at the some of the data preview we can notice that certain columns seem to have NAs right off the bat; we'll tackle this in just a bit. For now, given the great number of columns, I want to remove a few unnecessary columns so we can work with a more clean and concise set of data. 
+
+```{r}
+#cleaning: dropping unnecessary columns mdct, yr, mo, da
+sude <- subset(sude, select = -c(mdct, yr, mo, da))
+```
+There are many columns related to time: mdct, yr, mo, da, and hr. Date contains yr, mo, and da so I will discard those along with mdct which doesn't really add much as it is just date and hr. So I'll keep just date and hr separately. 
+
+```{r}
+#cleaning: dropping unnecessary columns wsid, inme, wsnm, prov
+sude <- subset(sude, select = -c(wsid, inme, wsnm, prov))
+```
+Now there seems to be other multiple variables in regards to weather stations and locations: wsid, wsnm, inme, city, and prov. Weather station id, wsid, and inme, station number, are essentially the same idea of identifying stations which I don't think is too useful. Also, wsnm, name of the station, usually the city location, is redundant as we have city so I will drop this as well. Finally, though province might be helpful, city is more specific and useful so this will be dropped as well. 
+
+```{r}
+#cleaning: dropping unnecessary columns smax, smin, dmax, tmax, tmin, dmin, hmax, hmin
+sude <- subset(sude, select = -c(smax, smin, dmax, tmax, tmin, dmin, hmax, hmin))
+str(sude)
+```
+There are still many variables left, 23 actually, and I think there is still some attributes that are unecessary for our modeling. Moving into the actual weather data, we see that for air pressure, dew point temperature, temperature, and relative humid temperature there are maximum and minimum columns in regards to each recording's max and min within the last hour. I believe the instant recording of each type of weather data is sufficient so I will drop smax, smin, dmax, dmin, hmax, and hmin. Tmax and tmin, which are the max and min temperatures of the last hour, will be dropped for another reason; they are too highly correlated with temperature, our target variable.
+
+Now we have a decent amount of valuable variables to work with so we are efficient with our resources. Let's take a deeper look into our variables with the summary() function.
+
+```{r}
+#exploration function 2
+summary(sude)
+```
+We can clearly see that city and date aren't numerical variables as they don't have statistics like the other variables which is appropriate but they don't seem to be the right type still; city would be more useful as a factor and date as a date type.
+
+```{r}
+#cleaning: changing variable data types for city and date
+sude$city <- as.factor(sude$city)
+sude$date <- as.Date(sude$date)
+summary(sude)
+```
+Now the last aspect of data cleaning, dealing with missing values. It seems that prcp, gbrd, temp, dewp, wdsp, and gust all have missing values with temp and dewp with the relatively least. Prcp is the amount of precipitation in the last hour and may have NAs here because there was no rainfall; this will be set to 0. Similarly, the NAs in gbrd, the measure of solar radiation, are most likely due to times of little sunlight, such as nighttime; this pattern can be easily verified in the graph below. So missing values in grbd will also be set to 0.
+
+```{r}
+#exploring gbrd for missing value patterns
+library(ggplot2)
+ggplot(sude, aes(x = date, y = gbrd)) + geom_line(size = 1)  + scale_x_date(limits = c(as.Date("2010-1-1"), as.Date("2010-3-30")))
+#cleaning: dealing with missing values for prcp, gbrd, set to 0
+sude$prcp[is.na(sude$prcp)] <- 0
+sude$gbrd[is.na(sude$gbrd)] <- 0
+```
+```{r}
+#cleaning: dealing with missing values for temp, dewp, wdsp, and gust with interpolation
+library(zoo)
+sude$temp <- na.approx(sude$temp)
+sude$dewp <- na.approx(sude$dewp)
+sude$wdsp <- na.approx(sude$wdsp)
+sude$gust <- na.approx(sude$gust)
+```
+Now for temp, dewp, wdsp, and gust, I originally thought about simply replacing the missing values with mean values but I'm not sure if a mean value across 16 years would be a good idea for so many NA values; it might muddle the data. Instead, after doing a little research on other cleaning techniques, I learned about interpolation which linearly approximates missing values between values the data already has. For this we need the zoo package
+
+```{r}
+#exploration function 3
+head(sude)
+tail(sude)
+```
+I believe most of the cleaning is now complete and now to further familiarize ourselves with the data. With the head()/tail() functions, we can see a preview of the beginning and end of the data so we can easily understand what one instance of the data looks like. An instance in this context is a snapshot of weather data every hour. This is a good time to see if there are any unreasonable data points at the ends of the data. We seem to be fine in this case. One interesting observation is that prcp and gbrd are 0s on the first hour and prcp, wdsp, wdct, and gust are 0 on the last day.
+
+```{r}
+#exploration function 4
+head(sort(table(city)))
+tail(sort(table(city)))
+```
+Next, I originally wanted to use the table() function to explore the conditional relationships between variables but due to the number of columns and magnitude of this data set, I decided to explore just one variable, city. Using table(), we are able to see how many instances are from each city. There is still a large number of cities, however, so I looked at the ones with the least and most amount of instances with a combination of sort and the head and tail functions. This was we are able to see which cities the data is most and least representative of. JanuÃ¡ria is at the bottom of this with 2400 observations and, as expected, Rio de Janeiro is at the top with 302352.
+
+```{r}
+#exploration function 5
+sort(cor(sude[sapply(sude,is.numeric)])[,8])
+```
+To aid with feature selection the final point of data exploration was with the cor() function which allows us to see the associations between numerical variables in the data set. There are 15 columns making it quite large of an output and difficult to focus on temperature, our target, I decided to print only temp's correlations with the other variables. By sorting this output, we can see the variables with the highest magnitude, excluding temp of course, are stp, dewp, gbrd, and gust which just slightly falls below 0.5. We will focus mostly on these variables.
+
+We have gotten a great look and feel of the numbers but let's dive deeper into how the relate to one another with some visualizations.
+
+```{r}
+#exploration graph 1
+top_cities = subset(sude, city == "Rio de Janeiro"| city == "Campos dos Goytacazes" | city == "SeropÃ©dica" | city == "Bauru" | city == "Campos do JordÃ£o")
+
+require(tidyr)
+
+dat2 <- top_cities %>%
+  gather(Total, Value, -city)
+
+ggplot(dat2, aes(x = city, y = Value, group = Total, fill = Total)) + 
+  geom_col(position = "dodge") + scale_y_continuous() +
+  scale_y_sqrt() + theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) + scale_x_discrete()
+```
+The first way I decided to explore the data was to look at the various weather factors for cities that had the highest number of observations, which we found earlier. These are Rio de Janeiro, Campos dos Goytacazes, SeropÃ©dica, Bauru, and Campos do JordÃ£o. This visualization is useful as it can help us compare some of the most representative cities of the data set. We see that variables such average temperatures or lon/lat are generally the same but the other variables vary a little. Let's look at the most noticable. Rio, has the highest gbrd, Campos do JordÃ£o has the highest elevation, and Rio and Campos dos Goytacazes seem to be very close for stp. Though these cities did not have high variance for comparison, this is a good thing as this means the data is more uniform and balanced for modeling.
+
+```{r}
+#exploration graph 2
+# for aggregation
+library(lubridate)
+library(dplyr)
+
+year<-as.numeric(format(sude$date, "%y"))
+month<-as.numeric(format(sude$date, "%m"))
+
+for_plot=aggregate(temp ~ + month + year, data =sude, FUN=mean)
+for_plot$month = as.factor(for_plot$month)
+for_plot$year = as.factor(for_plot$year)
+
+ggplot(for_plot, aes(x=month, y=temp)) + geom_line(aes(group=year, color=year),size=2,alpha=0.5) + geom_point(aes(group=year, color=year))
+```
+
+Another aspect I wanted to explore was how the average temperatures changed over time. For this I plotted the temperature as a line graph for each year, from 2009 to 2015, against the months of each respective year. It seems that the coolest year was arguably 2011 and the hottest for the beginning 2010, the middle 2012 or 2013, and the end 2012. We see a clear pattern of high temperatures at the beginning of the year and ends and low temperatures where it dip towards June and July.
+
+Now that we have explored the data, let's select our features and build our models.
+
+### Modeling (Linear regression, kNN Regression, )
+```{r}
+#feature selecting decisions
+library(caret)
+library(mlbench)
+corMatrix <- cor(cor(sude[sapply(sude,is.numeric)]))
+findCorrelation(corMatrix, cutoff=0.5, verbose=TRUE)
+```
+Previously, some early feature selection with the correlation function which helped us pick out stp, dewp, gbrd, and gust as the highest correlated variables with temperature, all above 0.4. However, before we move on, let's perform some feature selection with caret for more input on feature selection. The findCorrelation() function returns a list of columns that are suggested to be removed due to multicollinearity. I tried exploring other feature selection options such as recursive or FSelector but for some reason, most likely the size of the data, the RStudio environment either started to hang or froze. Utilizing the output of the findCorrelation function, however, we can still narrow down our features. The the features with the highest correlations are 6 with 8 and 9, 2 with 3, and 13 with 7. I will drop 6 and not 8 and 9 as hr doesn't seem very useful to predict temp, 9 is fine because it is correlated with temp, will drop 2 and 3, and finally will drop 7 instead of 13 as prcp had many more NAs during data cleaning than wdsp. So our best predictors are stp, dewp, gbrd, gust but more weather factors can always add a little significance to the model so I decided to include wdsp, wdct, and hmdy as well.
+
+***Note: kNN and SVM were attempted with the large data set of 6 million observations but due to hardware limitations and the fact the these model bog down at higher dimension it simply wasn't feasible. I truncated the sample to 30000 for train and test, which is still well above the requirement. Though the 6 million worked for linear regression and decision tree, the same train/test vectors are used for comparison's sake.***
+
+```{r}
+#divide train and test
+set.seed(1234)
+i <- sample(1:30000, 30000*0.75, replace=FALSE)
+train <- sude[i,]
+test <- sude[-i,]
+
+#build models
+
+#mulitple linear regression model
+lm1 <- lm(temp~stp+dewp+gbrd+gust+wdsp+wdct+hmdy, data=train)
+
+#SVM regression model
+library(e1071)
+svm1 <- svm(temp~stp+dewp+gbrd+gust+wdsp+wdct+hmdy, data=train, kernel="linear", cost=10, scale=FALSE)
+
+#decision tree model
+library(tree)
+tree1 <- tree(temp~stp+dewp+gbrd+gust+wdsp+wdct+hmdy, data=train)
+```
+
+### Metrics/Evaluation
+```{r}
+#evaluate linear regression
+summary(lm1)
+pred1 <- predict(lm1, newdata=test)
+mse1 <- mean((pred1 - test$temp)^2)
+cor1 <- cor(pred1, test$temp)
+print(paste("lm1 mse: ", mse1))
+print(paste("lm1 rmse: ", sqrt(mse1)))
+print(paste("lm1 cor: ", cor1))
+```
+Looking at summary output of the multiple linear regression model, we see that all of our predictors except wdct were statistically significant. The RSE in this case was 0.8482 which is actually quite smasll which is good. The Adjusted-R^2 is 0.9958 which mean the model fit the data very well. The F-statistic is very large and the associated p-value is very small which means the predictors and temp are veryr elated and the relationship is significant. Finally, the mse is quite small but as it difficult to predict let's look at the rmse, which is in units of temperature: 2.85. This mean the temperature was off by 2.85 degrees, which is very good in the context. The correlation is 0.928, a very high value close to 1, which indicates a strong positive relationship.
+
+```{r}
+summary(svm1)
+pred2 <- predict(svm1, newdata=test)
+mse2 <- mean((pred2 - test$temp)^2)
+cor2 <- cor(pred2, test$temp)
+print(paste("svm1 mse: ", mse2))
+print(paste("svm1 rmse: ", sqrt(mse2)))
+print(paste("svm1 cor: ", cor2))
+```
+SVM took a turn and didn't perform so well. It took the longest to build and predicting took even longer; for this reason it is the worst in terms of efficiency but also left little time for hyperparameter optimization. It could have been better but as memory has to scale quadratically with the number of data points, this algorithm wasn't the best option for a large data set. The mse is outrageous here and so the rmse was also very bad at 33.95; this means the model was off by 33.95 degrees on average. The correlation of 52.59% isn't terrible but isn't strong either; it's just okay.
+
+```{r}
+#evaluate decision  tree
+summary(tree1)
+pred3 <- predict(tree1, newdata=test)
+mse3 <- mean((pred3 - test$temp)^2)
+cor3 <- cor(pred3, test$temp)
+print(paste("tree1 mse: ", mse3))
+print(paste("tree1 rmse: ", sqrt(mse3)))
+print(paste("tree1 cor: ", cor3))
+```
+Finally, the decision tree performed better was not as good as the linear regression. Looking at the summary output we see that the model decided to use stp and hmdy, some of best features. The mse here was lower than SVM's but higher than linear regression. An mse of 39.49 translates to an rmse of 6.284 which means the model was off by 8.284 degrees on average. Finally, the correlation of 0.741 is moderately high which indicates a moderately strong positive relationship.
+
+Ranking the algorithms from best to worst correlation and rmse, we have multiple linear regression, the decision tree, and support vector machines. Linear regression assumes the relationship the relationship between the target and predictors is linear and in this case that excelled. SVM performs dot product of training samples so having a more predictors increased the complexity and decreased the run time cause it to perform worse efficiency-wise than the other algorithms. More time spent on hyperparameter optimization may have helped but with insane run times, this time was unavailable. The decision tree wasn't too bad but linear regression outperforms regression trees when the underlying function is linear and in the case of temperature this might be why linear regression performed much better. The data here was linear and not too complex so the tree may have overfit. Pruning may have helped but I wanted to compare the base tree. 
+
+In the end multiple linear regression won being the relatively simple linear algorithm. This project in the end was a great opportunity to not only compare various regression algorithms but also explore the southeast region of Brazil. Though the data is localized to Brazil, the application of temperature prediction is known to be valuable without any explanation. We already have amazing model but the more variables are explored the more we can fine tune weather models. I think the biggest takeaway from exploring is data is the weight of air pressure in predicting temperature. Moreover, in exploring multicolinearity we also learned that precipitation is related to wind speed, hour of day is strongly related to solar radiation and air pressure, and unsurprisingly, but refreshingly, that longitude is correlated with latitude. This project also was good practice for data visualization using ggplot2. All in all, I learned about Southeast Brazil's weather patterns and see how it is important to study various weather conditions to build more accurate models for the future.
+
